@@ -242,6 +242,8 @@ button:disabled { background: #282a36; cursor: not-allowed; opacity: 0.5; }
         </div>
         <button id="prevBmBtn" onclick="prevBookmark()">◀ 上一书签</button>
         <button id="nextBmBtn" onclick="nextBookmark()">下一书签 ▶</button>
+        <button id="copyBtn" onclick="copySnapshot()">📋 复制快照</button>
+        <button id="downloadBtn" onclick="downloadSnapshot()">💾 下载快照</button>
         <span class="time-display" id="timeDisplay">00:00 / 00:00</span>
     </div>
     <div class="timeline-bar">
@@ -272,8 +274,8 @@ button:disabled { background: #282a36; cursor: not-allowed; opacity: 0.5; }
     </div>
 </div>
 <script>
-const events = {{ events_json }};
-const bookmarks = {{ bookmarks_json }};
+const events = {{ events_json|safe }};
+const bookmarks = {{ bookmarks_json|safe }};
 const totalDuration = {{ total_duration }};
 
 let currentIdx = 0;
@@ -471,7 +473,7 @@ class VirtualTerminal {
                 continue;
             }
             const ch = data[i];
-            if (ch === '\\n') { this.cursorRow++; this._ensureRow(this.cursorRow); }
+            if (ch === '\\n') { this.cursorRow++; this.cursorCol = 0; this._ensureRow(this.cursorRow); }
             else if (ch === '\\r') { this.cursorCol = 0; }
             else if (ch === '\\t') {
                 const sp = 8 - (this.cursorCol % 8);
@@ -559,6 +561,23 @@ class VirtualTerminal {
             }
         }
         return html;
+    }
+
+    getPlainText() {
+        const lines = [];
+        for (let r = 0; r < this.lines.length; r++) {
+            const row = this.lines[r];
+            if (!row || row.length === 0) {
+                lines.push('');
+                continue;
+            }
+            let text = '';
+            for (let c = 0; c < row.length; c++) {
+                text += row[c].ch || ' ';
+            }
+            lines.push(text.replace(/\\s+$/, ''));
+        }
+        return lines.join('\\n');
     }
 
     clone() {
@@ -707,6 +726,63 @@ timeline.addEventListener('input', () => {
 timeline.addEventListener('mouseup', () => { isSeeking = false; });
 timeline.addEventListener('touchend', () => { isSeeking = false; });
 
+function copySnapshot() {
+    const text = vterm.getPlainText();
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => {
+            flashCopyStatus('已复制到剪贴板');
+        }).catch(() => {
+            fallbackCopy(text);
+        });
+    } else {
+        fallbackCopy(text);
+    }
+}
+
+function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+        document.execCommand('copy');
+        flashCopyStatus('已复制到剪贴板');
+    } catch (e) {
+        flashCopyStatus('复制失败');
+    }
+    document.body.removeChild(ta);
+}
+
+let flashTimer = null;
+function flashCopyStatus(msg) {
+    const btn = document.getElementById('copyBtn');
+    if (!btn) return;
+    const old = btn.textContent;
+    btn.textContent = msg;
+    btn.disabled = true;
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+        btn.textContent = old;
+        btn.disabled = false;
+    }, 1500);
+}
+
+function downloadSnapshot() {
+    const text = vterm.getPlainText();
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ts = formatTime(currentElapsed).replace(/:/g, '-');
+    a.download = 'snapshot_' + ts + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
 playBtn.addEventListener('click', play);
 pauseBtn.addEventListener('click', pause);
 resetBtn.addEventListener('click', reset);
@@ -719,6 +795,11 @@ updateTimeDisplay();
 
 
 class HTMLExporter:
+    @staticmethod
+    def _safe_json_for_script(data) -> str:
+        raw = json.dumps(data, ensure_ascii=False)
+        return raw.replace("</", "<\\/")
+
     @staticmethod
     def _format_time(seconds: float) -> str:
         h = int(seconds // 3600)
@@ -789,11 +870,12 @@ class HTMLExporter:
             })
             prev_offset = total_delay
 
-        events_json = json.dumps(events_data, ensure_ascii=False)
-        bookmarks_json = json.dumps(bookmarks_data, ensure_ascii=False)
+        events_json = HTMLExporter._safe_json_for_script(events_data)
+        bookmarks_json = HTMLExporter._safe_json_for_script(bookmarks_data)
 
-        from jinja2 import Template
-        template = Template(HTML_TEMPLATE)
+        from jinja2 import Environment, BaseLoader
+        env = Environment(loader=BaseLoader(), autoescape=True)
+        template = env.from_string(HTML_TEMPLATE)
         html_content = template.render(
             title=title or os.path.basename(log_file),
             host=host,

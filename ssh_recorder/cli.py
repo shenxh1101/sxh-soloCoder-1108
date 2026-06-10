@@ -89,6 +89,23 @@ def cmd_play(args) -> int:
             _print_bookmarks(bookmarks)
         return 0
 
+    if args.snapshot_text:
+        text = controller.snapshot_text(args.snapshot_text)
+        if text is None:
+            print(f"Error: Bookmark '{args.snapshot_text}' not found", file=sys.stderr)
+            return 1
+        print(text)
+        return 0
+
+    if args.snapshot_json:
+        import json
+        data = controller.snapshot_json(args.snapshot_json)
+        if data is None:
+            print(f"Error: Bookmark '{args.snapshot_json}' not found", file=sys.stderr)
+            return 1
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+
     if args.snapshot:
         if not controller.snapshot(args.snapshot):
             print(f"Error: Bookmark '{args.snapshot}' not found", file=sys.stderr)
@@ -229,6 +246,62 @@ def cmd_list_bookmarks(args) -> int:
     return 0
 
 
+def cmd_compare(args) -> int:
+    import difflib
+    from .player import PlaybackController
+
+    log1 = args.log1
+    log2 = args.log2 or args.log1
+    bm1 = args.bookmark1
+    bm2 = args.bookmark2
+
+    if not os.path.exists(log1):
+        print(f"Error: Log file not found: {log1}", file=sys.stderr)
+        return 2
+    if log2 != log1 and not os.path.exists(log2):
+        print(f"Error: Log file not found: {log2}", file=sys.stderr)
+        return 2
+
+    ctrl1 = PlaybackController(log_file=log1, show_input=args.show_input)
+    if log2 == log1:
+        ctrl2 = ctrl1
+    else:
+        ctrl2 = PlaybackController(log_file=log2, show_input=args.show_input)
+
+    text1 = ctrl1.snapshot_text(bm1)
+    if text1 is None:
+        print(f"Error: Bookmark '{bm1}' not found in {os.path.basename(log1)}", file=sys.stderr)
+        return 2
+
+    text2 = ctrl2.snapshot_text(bm2)
+    if text2 is None:
+        print(f"Error: Bookmark '{bm2}' not found in {os.path.basename(log2)}", file=sys.stderr)
+        return 2
+
+    lines1 = text1.splitlines(keepends=True)
+    lines2 = text2.splitlines(keepends=True)
+
+    if lines1 == lines2:
+        if not args.quiet:
+            print("Snapshots are identical.")
+            print(f"  Left:  {bm1} @ {os.path.basename(log1)}")
+            print(f"  Right: {bm2} @ {os.path.basename(log2)}")
+        return 0
+
+    if not args.quiet:
+        label1 = f"{os.path.basename(log1)}::{bm1}"
+        label2 = f"{os.path.basename(log2)}::{bm2}"
+        diff = difflib.unified_diff(
+            lines1, lines2,
+            fromfile=label1,
+            tofile=label2,
+            lineterm="",
+        )
+        print("\n".join(diff))
+
+    return 1
+
+
 def cmd_multi_record(args) -> int:
     from .config import ConfigLoader
     from .concurrent import ConcurrentSessionManager
@@ -330,7 +403,9 @@ def build_parser() -> argparse.ArgumentParser:
     play_parser.add_argument("--show-input", action="store_true", help="Show user input during playback")
     play_parser.add_argument("--list-bookmarks", action="store_true", help="List all bookmarks and exit")
     play_parser.add_argument("--jump-bookmark", help="Jump to a specific bookmark by name")
-    play_parser.add_argument("--snapshot", metavar="BOOKMARK", help="Non-interactive: output terminal state at bookmark and exit")
+    play_parser.add_argument("--snapshot", metavar="BOOKMARK", help="Non-interactive: output raw terminal state at bookmark and exit")
+    play_parser.add_argument("--snapshot-text", metavar="BOOKMARK", help="Non-interactive: output clean plain text snapshot at bookmark")
+    play_parser.add_argument("--snapshot-json", metavar="BOOKMARK", help="Non-interactive: output structured JSON snapshot at bookmark")
     play_parser.set_defaults(func=cmd_play)
 
     # Clean
@@ -372,6 +447,16 @@ def build_parser() -> argparse.ArgumentParser:
     lbm_parser = subparsers.add_parser("list-bookmarks", help="List bookmarks in a session log")
     lbm_parser.add_argument("log_file", help="Path to session log file")
     lbm_parser.set_defaults(func=cmd_list_bookmarks)
+
+    # Compare
+    cmp_parser = subparsers.add_parser("compare", help="Compare terminal snapshots from two bookmarks")
+    cmp_parser.add_argument("log1", help="First session log file")
+    cmp_parser.add_argument("log2", nargs="?", help="Second session log file (default: same as first)")
+    cmp_parser.add_argument("--bm1", "--bookmark1", dest="bookmark1", required=True, help="First bookmark name")
+    cmp_parser.add_argument("--bm2", "--bookmark2", dest="bookmark2", required=True, help="Second bookmark name")
+    cmp_parser.add_argument("--show-input", action="store_true", help="Include user input in snapshot")
+    cmp_parser.add_argument("--quiet", action="store_true", help="Only set exit code, no output")
+    cmp_parser.set_defaults(func=cmd_compare)
 
     return parser
 

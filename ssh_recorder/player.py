@@ -145,6 +145,38 @@ class PlaybackController:
         sys.stdout.flush()
         return True
 
+    def snapshot_text(self, bookmark_name: str) -> Optional[str]:
+        from .vterminal import VirtualTerminal
+        bm_info = None
+        for bm in self.list_bookmarks():
+            if bm["name"] == bookmark_name:
+                bm_info = bm
+                break
+        if bm_info is None:
+            return None
+        vt = VirtualTerminal.replay_entries(self.entries, stop_index=bm_info["entry_index"],
+                                            show_input=self.show_input)
+        return vt.get_plain_text()
+
+    def snapshot_json(self, bookmark_name: str) -> Optional[Dict[str, Any]]:
+        from .vterminal import VirtualTerminal
+        bm_info = None
+        for bm in self.list_bookmarks():
+            if bm["name"] == bookmark_name:
+                bm_info = bm
+                break
+        if bm_info is None:
+            return None
+        vt = VirtualTerminal.replay_entries(self.entries, stop_index=bm_info["entry_index"],
+                                            show_input=self.show_input)
+        return {
+            "bookmark": bm_info["name"],
+            "time_offset": bm_info["time_offset"],
+            "is_after_end": bm_info.get("is_after_end", False),
+            "plain_text": vt.get_plain_text(),
+            "terminal": vt.to_dict(),
+        }
+
     def _format_time(self, seconds: float) -> str:
         h = int(seconds // 3600)
         m = int((seconds % 3600) // 60)
