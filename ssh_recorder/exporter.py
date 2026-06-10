@@ -1,9 +1,8 @@
 import os
 import re
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
-from jinja2 import Template
 
 from .storage import SessionReader, SessionLogEntry
 
@@ -229,26 +228,28 @@ function updateTimeDisplay() {
     timeDisplay.textContent = formatTime(currentElapsed) + ' / ' + formatTime(totalDuration);
 }
 
+const ESC = '\x1b';
+const sgrCodes = {
+    '0': null, '1': 'bold', '4': 'underline',
+    '30': 'fg-black', '31': 'fg-red', '32': 'fg-green', '33': 'fg-yellow',
+    '34': 'fg-blue', '35': 'fg-magenta', '36': 'fg-cyan', '37': 'fg-white',
+    '40': 'bg-black', '41': 'bg-red', '42': 'bg-green', '43': 'bg-yellow',
+    '44': 'bg-blue', '45': 'bg-magenta', '46': 'bg-cyan', '47': 'bg-white',
+    '90': 'fg-black', '91': 'fg-red', '92': 'fg-green', '93': 'fg-yellow',
+    '94': 'fg-blue', '95': 'fg-magenta', '96': 'fg-cyan', '97': 'fg-white',
+    '100': 'bg-black', '101': 'bg-red', '102': 'bg-green', '103': 'bg-yellow',
+    '104': 'bg-blue', '105': 'bg-magenta', '106': 'bg-cyan', '107': 'bg-white',
+};
+
 function ansiToHtml(text) {
     let html = '';
     let openSpans = 0;
-    const stack = [];
-    
+
     text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    
-    const sgrCodes = {
-        '0': null, '1': 'bold', '4': 'underline',
-        '30': 'fg-black', '31': 'fg-red', '32': 'fg-green', '33': 'fg-yellow',
-        '34': 'fg-blue', '35': 'fg-magenta', '36': 'fg-cyan', '37': 'fg-white',
-        '40': 'bg-black', '41': 'bg-red', '42': 'bg-green', '43': 'bg-yellow',
-        '44': 'bg-blue', '45': 'bg-magenta', '46': 'bg-cyan', '47': 'bg-white',
-        '90': 'fg-black', '91': 'fg-red', '92': 'fg-green', '93': 'fg-yellow',
-        '94': 'fg-blue', '95': 'fg-magenta', '96': 'fg-cyan', '97': 'fg-white',
-    };
-    
+
     let i = 0;
     while (i < text.length) {
-        if (text.substring(i, i + 2) === '\\x1b[' || text[i] === '\\x1b' && text[i + 1] === '[') {
+        if (text.charCodeAt(i) === 27 && text[i + 1] === '[') {
             let j = i + 2;
             while (j < text.length && !/[a-zA-Z]/.test(text[j])) j++;
             if (j < text.length) {
@@ -262,26 +263,43 @@ function ansiToHtml(text) {
                                 html += '</span>';
                                 openSpans--;
                             }
-                            stack.length = 0;
                         } else {
                             const cls = sgrCodes[code];
                             if (cls) {
                                 html += '<span class="' + cls + '">';
-                                stack.push(cls);
                                 openSpans++;
                             }
                         }
                     }
+                } else if (cmd === 'H' || cmd === 'f' || cmd === 'A' || cmd === 'B' ||
+                           cmd === 'C' || cmd === 'D' || cmd === 's' || cmd === 'u' ||
+                           cmd === 'J' || cmd === 'K' || cmd === 'h' || cmd === 'l' ||
+                           cmd === 'p' || cmd === 'P') {
                 }
                 i = j + 1;
                 continue;
             }
         }
-        if (text[i] === '\\n') {
-            html += '\\n';
-        } else if (text[i] === '\\r') {
-        } else if (text[i] === '\\t') {
+        if (text.charCodeAt(i) === 27) {
+            let j = i + 1;
+            while (j < text.length && text.charCodeAt(j) >= 0x40 && text.charCodeAt(j) <= 0x7e &&
+                   text.charCodeAt(j) !== 0x5c && text.charCodeAt(j) !== 0x07) j++;
+            if (j < text.length && (text[j] === '\x07' || text.substring(j - 1, j + 1) === ESC + '\\')) {
+                i = (text[j] === '\x07') ? j + 1 : j + 2;
+                continue;
+            }
+            i++;
+            continue;
+        }
+        if (text[i] === '\n') {
+            html += '\n';
+        } else if (text[i] === '\r') {
+        } else if (text[i] === '\t') {
             html += '    ';
+        } else if (text[i] === '\b') {
+            if (html.length > 0 && html[html.length - 1] !== '\n') {
+                html = html.slice(0, -1);
+            }
         } else if (text.charCodeAt(i) < 32 || text.charCodeAt(i) === 127) {
         } else {
             html += text[i];
@@ -295,16 +313,19 @@ function ansiToHtml(text) {
     return html;
 }
 
-function renderEvent(event) {
-    const text = event.data;
-    const decoded = text.split('').map(c => {
-        const code = c.charCodeAt(0);
-        if (code < 32 || code === 127) {
-            return '\\x' + code.toString(16).padStart(2, '0');
-        }
-        return c;
-    }).join('');
-    terminal.innerHTML = ansiToHtml(terminal.textContent + decoded);
+function appendEventToTerminal(event) {
+    const text = event.data || '';
+    terminal.innerHTML = ansiToHtml(terminal.textContent + text);
+    terminal.scrollTop = terminal.scrollHeight;
+}
+
+function renderEventsTo(idx) {
+    terminal.textContent = '';
+    terminal.innerHTML = '';
+    for (let i = 0; i < idx && i < events.length; i++) {
+        terminal.textContent += (events[i].data || '');
+    }
+    terminal.innerHTML = ansiToHtml(terminal.textContent);
     terminal.scrollTop = terminal.scrollHeight;
 }
 
@@ -314,7 +335,7 @@ function playNext() {
         return;
     }
     const event = events[currentIdx];
-    renderEvent(event);
+    appendEventToTerminal(event);
     currentElapsed += event.delay;
     updateTimeDisplay();
     currentIdx++;
@@ -331,7 +352,10 @@ function play() {
     isPlaying = true;
     playBtn.classList.add('hidden');
     pauseBtn.classList.remove('hidden');
-    playNext();
+    if (currentIdx < events.length) {
+        const delay = events[currentIdx].delay * 1000 / speed;
+        timerId = setTimeout(playNext, Math.max(1, delay));
+    }
 }
 
 function pause() {
@@ -363,12 +387,13 @@ function changeSpeed(delta) {
 }
 
 function jumpTo(idx) {
-    reset();
+    pause();
+    idx = Math.max(0, Math.min(idx, events.length));
     let elapsed = 0;
-    for (let i = 0; i < idx && i < events.length; i++) {
-        renderEvent(events[i]);
+    for (let i = 0; i < idx; i++) {
         elapsed += events[i].delay;
     }
+    renderEventsTo(idx);
     currentIdx = idx;
     currentElapsed = elapsed;
     updateTimeDisplay();
@@ -456,6 +481,7 @@ class HTMLExporter:
         events_json = json.dumps(events_data, ensure_ascii=False)
         bookmarks_json = json.dumps(bookmarks_data, ensure_ascii=False)
 
+        from jinja2 import Template
         template = Template(HTML_TEMPLATE)
         html_content = template.render(
             title=title or os.path.basename(log_file),

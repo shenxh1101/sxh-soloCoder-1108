@@ -1,5 +1,4 @@
 import os
-import yaml
 from typing import Dict, Any, Optional
 
 
@@ -38,6 +37,8 @@ class ServerConfig:
 class ConfigLoader:
     @staticmethod
     def load_servers(config_file: str) -> Dict[str, ServerConfig]:
+        import yaml
+
         config_file = os.path.expanduser(config_file)
         if not os.path.exists(config_file):
             return {}

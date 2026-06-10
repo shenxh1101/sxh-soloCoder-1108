@@ -89,6 +89,23 @@ class PlaybackController:
                 return True
         return False
 
+    def add_bookmark_at_current(self, name: str, description: str = "") -> bool:
+        if self.reader is None:
+            return False
+        session_start = None
+        if self.reader.metadata and self.reader.metadata.started_at:
+            session_start = self.reader.metadata.started_at
+        else:
+            session_start = self.entries[0].timestamp if self.entries else time.time()
+
+        current_timestamp = session_start + self._elapsed
+        current_idx = max(0, min(self._current_idx, len(self.entries) - 1))
+        if current_idx < len(self.entries):
+            current_timestamp = self.entries[current_idx].timestamp
+
+        self.reader.add_bookmark(name, description, timestamp=current_timestamp)
+        return True
+
     def _format_time(self, seconds: float) -> str:
         h = int(seconds // 3600)
         m = int((seconds % 3600) // 60)
@@ -106,7 +123,7 @@ class PlaybackController:
             f"\r\x1b[K[{status}] {self._format_time(self._elapsed)} / "
             f"{self._format_time(total_duration)} "
             f"({progress:.1f}%) x{speed:.1f} "
-            f"[Space=Pause, F/B=Seek, +/-=Speed, Q=Quit]"
+            f"[Space=Pause, M=Bookmark, F/B=Seek, +/-=Speed, Q=Quit]"
         )
         sys.stderr.flush()
 
@@ -134,6 +151,16 @@ class PlaybackController:
                     self._elapsed = sum(e.delay for e in self.entries[:self._current_idx])
                     sys.stdout.write("\x1b[2J\x1b[H")
                     sys.stdout.flush()
+                    for e in self.entries[:self._current_idx]:
+                        if self.show_input or e.stream == "o":
+                            try:
+                                sys.stdout.buffer.write(e.data)
+                            except Exception:
+                                try:
+                                    sys.stdout.write(e.data.decode("utf-8", errors="replace"))
+                                except Exception:
+                                    pass
+                    sys.stdout.flush()
                 if self._paused:
                     time.sleep(0.05)
                     self._print_status()
@@ -143,17 +170,6 @@ class PlaybackController:
                 break
 
             entry = self.entries[self._current_idx]
-
-            if self.show_input or entry.stream == "o":
-                try:
-                    sys.stdout.buffer.write(entry.data)
-                    sys.stdout.flush()
-                except Exception:
-                    try:
-                        sys.stdout.write(entry.data.decode("utf-8", errors="replace"))
-                        sys.stdout.flush()
-                    except Exception:
-                        pass
 
             speed = self.get_speed()
             delay = entry.delay / speed if speed > 0 else 0
@@ -174,6 +190,17 @@ class PlaybackController:
                     break
                 time.sleep(min(0.05, remaining))
 
+            if self.show_input or entry.stream == "o":
+                try:
+                    sys.stdout.buffer.write(entry.data)
+                    sys.stdout.flush()
+                except Exception:
+                    try:
+                        sys.stdout.write(entry.data.decode("utf-8", errors="replace"))
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+
             self._elapsed += entry.delay
             self._current_idx += 1
             self._print_status()
@@ -186,6 +213,78 @@ class InteractivePlayer:
     def __init__(self, controller: PlaybackController):
         self.controller = controller
         self._thread: Optional[threading.Thread] = None
+
+    def _prompt_bookmark_name(self) -> Optional[str]:
+        import platform
+        was_paused = self.controller.is_paused
+        if not was_paused:
+            self.controller.toggle_pause()
+
+        sys.stderr.write("\r\n\x1b[33mEnter bookmark name:\x1b[0m ")
+        sys.stderr.flush()
+
+        name = ""
+        if platform.system() == "Windows":
+            import msvcrt
+            while True:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    if ch == "\r" or ch == "\n":
+                        break
+                    elif ch == "\x08" or ch == "\x7f":
+                        if name:
+                            name = name[:-1]
+                            sys.stderr.write("\b \b")
+                            sys.stderr.flush()
+                    elif ch == "\x03":
+                        name = None
+                        break
+                    else:
+                        name += ch
+                        sys.stderr.write(ch)
+                        sys.stderr.flush()
+        else:
+            import tty
+            import termios
+            import select
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setcbreak(fd)
+                while True:
+                    r, _, _ = select.select([sys.stdin], [], [], None)
+                    if r:
+                        ch = sys.stdin.read(1)
+                        if ch == "\r" or ch == "\n":
+                            break
+                        elif ch == "\x08" or ch == "\x7f":
+                            if name:
+                                name = name[:-1]
+                                sys.stderr.write("\b \b")
+                                sys.stderr.flush()
+                        elif ch == "\x03":
+                            name = None
+                            break
+                        else:
+                            name += ch
+                            sys.stderr.write(ch)
+                            sys.stderr.flush()
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+        if name:
+            if self.controller.add_bookmark_at_current(name):
+                sys.stderr.write(f"\r\n\x1b[32m[Bookmark saved: {name}]\x1b[0m\r\n")
+            else:
+                sys.stderr.write("\r\n\x1b[31m[Failed to save bookmark]\x1b[0m\r\n")
+        elif name is None:
+            sys.stderr.write("\r\n\x1b[33m[Bookmark cancelled]\x1b[0m\r\n")
+        sys.stderr.flush()
+
+        if not was_paused:
+            self.controller.toggle_pause()
+
+        return name if name else None
 
     def _handle_keyboard(self) -> None:
         import platform
@@ -210,6 +309,8 @@ class InteractivePlayer:
                             self.controller.jump_by_seconds(5)
                         elif ch == "b" or ch == "B":
                             self.controller.jump_by_seconds(-5)
+                        elif ch == "m" or ch == "M":
+                            self._prompt_bookmark_name()
             except Exception:
                 pass
             return
@@ -242,6 +343,8 @@ class InteractivePlayer:
                             self.controller.jump_by_seconds(5)
                         elif ch == "b" or ch == "B":
                             self.controller.jump_by_seconds(-5)
+                        elif ch == "m" or ch == "M":
+                            self._prompt_bookmark_name()
                         elif ch == "B":
                             bookmarks = self.controller.list_bookmarks()
                             if bookmarks:

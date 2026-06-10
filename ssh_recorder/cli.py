@@ -6,17 +6,11 @@ import signal
 from datetime import datetime
 from typing import Optional
 
-from .config import ServerConfig, ConfigLoader
-from .recorder import SSHRecorder
-from .player import PlaybackController, InteractivePlayer
-from .cleaner import LogCleaner
-from .exporter import HTMLExporter
-from .searcher import LogSearcher
-from .concurrent import ConcurrentSessionManager
-from .storage import SessionReader
-
 
 def cmd_record(args) -> int:
+    from .config import ServerConfig, ConfigLoader
+    from .recorder import SSHRecorder
+
     if args.config and args.name:
         server = ConfigLoader.get_server(args.config, args.name)
         if server is None:
@@ -53,6 +47,8 @@ def cmd_record(args) -> int:
 
 
 def cmd_play(args) -> int:
+    from .player import PlaybackController, InteractivePlayer
+
     if not os.path.exists(args.log_file):
         print(f"Error: Log file not found: {args.log_file}", file=sys.stderr)
         return 1
@@ -88,6 +84,8 @@ def cmd_play(args) -> int:
 
 
 def cmd_clean(args) -> int:
+    from .cleaner import LogCleaner
+
     if not os.path.exists(args.input):
         print(f"Error: Input file not found: {args.input}", file=sys.stderr)
         return 1
@@ -110,6 +108,8 @@ def cmd_clean(args) -> int:
 
 
 def cmd_export(args) -> int:
+    from .exporter import HTMLExporter
+
     if not os.path.exists(args.input):
         print(f"Error: Input file not found: {args.input}", file=sys.stderr)
         return 1
@@ -129,6 +129,8 @@ def cmd_export(args) -> int:
 
 
 def cmd_search(args) -> int:
+    from .searcher import LogSearcher
+
     if not os.path.exists(args.path):
         print(f"Error: Path not found: {args.path}", file=sys.stderr)
         return 1
@@ -157,6 +159,8 @@ def cmd_search(args) -> int:
 
 
 def cmd_list(args) -> int:
+    from .storage import SessionReader
+
     log_dir = args.log_dir
     if not os.path.exists(log_dir):
         print(f"Error: Log directory not found: {log_dir}", file=sys.stderr)
@@ -187,6 +191,9 @@ def cmd_list(args) -> int:
 
 
 def cmd_multi_record(args) -> int:
+    from .config import ConfigLoader
+    from .concurrent import ConcurrentSessionManager
+
     if not args.config:
         print("Error: --config is required for multi-session recording", file=sys.stderr)
         return 1

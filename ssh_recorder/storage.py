@@ -241,6 +241,31 @@ class SessionReader:
             return self.metadata.bookmarks
         return []
 
+    def add_bookmark(self, name: str, description: str = "", timestamp: Optional[float] = None) -> Dict[str, Any]:
+        import time as _time
+        if self.metadata is None:
+            self.metadata = SessionMetadata(
+                session_id=os.path.basename(self.log_file),
+                host="unknown",
+                user="unknown",
+                started_at=_time.time(),
+            )
+        bookmark = {
+            "name": name,
+            "description": description,
+            "timestamp": timestamp or _time.time(),
+            "offset": 0,
+        }
+        self.metadata.bookmarks.append(bookmark)
+        self.save_metadata()
+        return bookmark
+
+    def save_metadata(self) -> None:
+        if self.metadata is None:
+            return
+        with open(self.meta_file, "w", encoding="utf-8") as mf:
+            json.dump(self.metadata.to_dict(), mf, indent=2, ensure_ascii=False)
+
     @staticmethod
     def find_logs(log_dir: str = "logs") -> List[str]:
         results = []
