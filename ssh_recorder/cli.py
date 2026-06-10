@@ -46,6 +46,28 @@ def cmd_record(args) -> int:
         return 0
 
 
+def _format_bookmark_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def _print_bookmarks(bookmarks) -> None:
+    print("Bookmarks:")
+    prev_offset = 0.0
+    for i, bm in enumerate(bookmarks, 1):
+        time_str = _format_bookmark_time(bm["time_offset"])
+        rel = bm["time_offset"] - prev_offset
+        rel_str = _format_bookmark_time(rel)
+        after_tag = " [末尾后]" if bm.get("is_after_end") else ""
+        desc_part = f" — {bm['description']}" if bm.get("description") else ""
+        print(f"  {i}. {bm['name']} @ {time_str} (+{rel_str}){after_tag}{desc_part}")
+        prev_offset = bm["time_offset"]
+
+
 def cmd_play(args) -> int:
     from .player import PlaybackController, InteractivePlayer
 
@@ -64,13 +86,13 @@ def cmd_play(args) -> int:
         if not bookmarks:
             print("No bookmarks found in this session.")
         else:
-            print("Bookmarks:")
-            for i, bm in enumerate(bookmarks, 1):
-                print(f"  {i}. {bm['name']}")
-                if bm["description"]:
-                    print(f"     Description: {bm['description']}")
-                m, s = divmod(int(bm["time_offset"]), 60)
-                print(f"     Time: {m:02d}:{s:02d}")
+            _print_bookmarks(bookmarks)
+        return 0
+
+    if args.snapshot:
+        if not controller.snapshot(args.snapshot):
+            print(f"Error: Bookmark '{args.snapshot}' not found", file=sys.stderr)
+            return 1
         return 0
 
     if args.jump_bookmark:
@@ -203,13 +225,7 @@ def cmd_list_bookmarks(args) -> int:
         print("No bookmarks found in this session.")
         return 0
 
-    print("Bookmarks:")
-    for i, bm in enumerate(bookmarks, 1):
-        print(f"  {i}. {bm['name']}")
-        if bm["description"]:
-            print(f"     Description: {bm['description']}")
-        m, s = divmod(int(bm["time_offset"]), 60)
-        print(f"     Time: {m:02d}:{s:02d}")
+    _print_bookmarks(bookmarks)
     return 0
 
 
@@ -314,6 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
     play_parser.add_argument("--show-input", action="store_true", help="Show user input during playback")
     play_parser.add_argument("--list-bookmarks", action="store_true", help="List all bookmarks and exit")
     play_parser.add_argument("--jump-bookmark", help="Jump to a specific bookmark by name")
+    play_parser.add_argument("--snapshot", metavar="BOOKMARK", help="Non-interactive: output terminal state at bookmark and exit")
     play_parser.set_defaults(func=cmd_play)
 
     # Clean

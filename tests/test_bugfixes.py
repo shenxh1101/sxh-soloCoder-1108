@@ -131,11 +131,11 @@ def test_html_export_with_bookmarks():
 
         assert "bm_middle" in html, "Bookmark name should be in HTML"
         assert "jumpToBookmark" in html, "Jump function should exist"
-        assert "renderEventsTo" in html, "Render function should exist"
+        assert "replayTo" in html, "Replay function should exist"
         assert "charCodeAt(i) === 27" in html, "ANSI ESC parser should use real ESC code"
 
         print("  HTML contains bookmarks: OK")
-        print("  HTML has renderEventsTo function: OK")
+        print("  HTML has replayTo function: OK")
         print("  HTML ANSI parser uses real ESC: OK")
         print("  HTML export: PASSED")
 

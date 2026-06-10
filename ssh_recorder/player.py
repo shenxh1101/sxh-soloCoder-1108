@@ -75,12 +75,14 @@ class PlaybackController:
             while entry_idx < len(self.entries) and self.entries[entry_idx].timestamp < bm["timestamp"]:
                 total_delay += self.entries[entry_idx].delay
                 entry_idx += 1
+            is_after_end = entry_idx >= len(self.entries)
             result.append({
                 "name": bm.get("name", ""),
                 "description": bm.get("description", ""),
                 "timestamp": bm["timestamp"],
                 "time_offset": total_delay,
                 "entry_index": entry_idx,
+                "is_after_end": is_after_end,
             })
         return result
 
@@ -104,6 +106,43 @@ class PlaybackController:
             current_timestamp = self.reader.metadata.ended_at
 
         self.reader.add_bookmark(name, description, timestamp=current_timestamp)
+        return True
+
+    def snapshot(self, bookmark_name: str) -> bool:
+        bm_info = None
+        for bm in self.list_bookmarks():
+            if bm["name"] == bookmark_name:
+                bm_info = bm
+                break
+        if bm_info is None:
+            return False
+
+        idx = bm_info["entry_index"]
+        sys.stdout.write("\x1b[2J\x1b[H")
+        sys.stdout.flush()
+        for i in range(idx):
+            entry = self.entries[i]
+            if entry.stream == "o":
+                try:
+                    out = sys.stdout
+                    if hasattr(out, 'buffer'):
+                        out.buffer.write(entry.data)
+                    else:
+                        out.write(entry.data.decode("utf-8", errors="replace"))
+                except Exception:
+                    try:
+                        sys.stdout.write(entry.data.decode("utf-8", errors="replace"))
+                    except Exception:
+                        pass
+        try:
+            if hasattr(sys.stdout, 'buffer'):
+                sys.stdout.buffer.flush()
+            else:
+                sys.stdout.flush()
+        except Exception:
+            pass
+        sys.stdout.write("\n")
+        sys.stdout.flush()
         return True
 
     def _format_time(self, seconds: float) -> str:

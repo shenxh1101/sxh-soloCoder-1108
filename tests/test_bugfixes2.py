@@ -43,7 +43,7 @@ def test_list_bookmarks_subcommand():
         assert "step1" in output, "Bookmark 'step1' should appear"
         assert "step2" in output, "Bookmark 'step2' should appear"
         assert "First step" in output, "Description should appear"
-        assert "Time:" in output, "Time should appear"
+        assert "@" in output, "Time should appear with @ marker"
         print("  list-bookmarks subcommand: PASSED")
 
     with tempfile.TemporaryDirectory() as tmpdir:
