@@ -49,12 +49,14 @@ class PlaybackController:
 
     def jump_to_index(self, idx: int) -> None:
         with self._lock:
-            self._jump_to_idx = max(0, min(idx, len(self.entries) - 1))
+            self._jump_to_idx = max(0, min(idx, len(self.entries)))
 
     def jump_by_seconds(self, seconds: float) -> None:
         target_elapsed = self._elapsed + seconds
+        total_duration = sum(e.delay for e in self.entries)
+        target_elapsed = max(0.0, min(target_elapsed, total_duration))
         total = 0.0
-        target_idx = 0
+        target_idx = len(self.entries)
         for i, entry in enumerate(self.entries):
             if total >= target_elapsed:
                 target_idx = i
@@ -92,16 +94,14 @@ class PlaybackController:
     def add_bookmark_at_current(self, name: str, description: str = "") -> bool:
         if self.reader is None:
             return False
-        session_start = None
-        if self.reader.metadata and self.reader.metadata.started_at:
-            session_start = self.reader.metadata.started_at
-        else:
-            session_start = self.entries[0].timestamp if self.entries else time.time()
+        if not self.entries:
+            return False
 
-        current_timestamp = session_start + self._elapsed
-        current_idx = max(0, min(self._current_idx, len(self.entries) - 1))
-        if current_idx < len(self.entries):
-            current_timestamp = self.entries[current_idx].timestamp
+        current_idx = min(self._current_idx, len(self.entries) - 1)
+        current_timestamp = self.entries[current_idx].timestamp
+
+        if self._current_idx >= len(self.entries) and self.reader.metadata and self.reader.metadata.ended_at:
+            current_timestamp = self.reader.metadata.ended_at
 
         self.reader.add_bookmark(name, description, timestamp=current_timestamp)
         return True

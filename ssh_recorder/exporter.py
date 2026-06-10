@@ -228,105 +228,299 @@ function updateTimeDisplay() {
     timeDisplay.textContent = formatTime(currentElapsed) + ' / ' + formatTime(totalDuration);
 }
 
-const ESC = '\x1b';
-const sgrCodes = {
-    '0': null, '1': 'bold', '4': 'underline',
-    '30': 'fg-black', '31': 'fg-red', '32': 'fg-green', '33': 'fg-yellow',
-    '34': 'fg-blue', '35': 'fg-magenta', '36': 'fg-cyan', '37': 'fg-white',
-    '40': 'bg-black', '41': 'bg-red', '42': 'bg-green', '43': 'bg-yellow',
-    '44': 'bg-blue', '45': 'bg-magenta', '46': 'bg-cyan', '47': 'bg-white',
-    '90': 'fg-black', '91': 'fg-red', '92': 'fg-green', '93': 'fg-yellow',
-    '94': 'fg-blue', '95': 'fg-magenta', '96': 'fg-cyan', '97': 'fg-white',
-    '100': 'bg-black', '101': 'bg-red', '102': 'bg-green', '103': 'bg-yellow',
-    '104': 'bg-blue', '105': 'bg-magenta', '106': 'bg-cyan', '107': 'bg-white',
-};
+const COLS = 80;
+const ROWS = 24;
 
-function ansiToHtml(text) {
-    let html = '';
-    let openSpans = 0;
+class VirtualTerminal {
+    constructor() {
+        this.lines = [''];
+        this.cursorRow = 0;
+        this.cursorCol = 0;
+        this.fg = '37';
+        this.bg = '40';
+        this.bold = false;
+        this.underline = false;
+    }
 
-    text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    _ensureRow(row) {
+        while (this.lines.length <= row) this.lines.push('');
+        if (row < 0) row = 0;
+    }
 
-    let i = 0;
-    while (i < text.length) {
-        if (text.charCodeAt(i) === 27 && text[i + 1] === '[') {
-            let j = i + 2;
-            while (j < text.length && !/[a-zA-Z]/.test(text[j])) j++;
-            if (j < text.length) {
-                const cmd = text[j];
-                const params = text.substring(i + 2, j);
-                if (cmd === 'm') {
-                    const codes = params ? params.split(';') : ['0'];
-                    for (const code of codes) {
-                        if (code === '0' || code === '') {
-                            while (openSpans > 0) {
-                                html += '</span>';
-                                openSpans--;
+    _setChar(row, col, ch) {
+        this._ensureRow(row);
+        let line = this.lines[row];
+        while (line.length < col) line += ' ';
+        line = line.substring(0, col) + ch + line.substring(col + 1);
+        this.lines[row] = line;
+    }
+
+    _clearLine(row, mode) {
+        this._ensureRow(row);
+        let line = this.lines[row];
+        if (mode === 0) {
+            this.lines[row] = line.substring(0, this.cursorCol);
+        } else if (mode === 1) {
+            let prefix = '';
+            for (let i = 0; i < this.cursorCol + 1; i++) prefix += ' ';
+            this.lines[row] = prefix + line.substring(this.cursorCol + 1);
+        } else if (mode === 2) {
+            this.lines[row] = '';
+        }
+    }
+
+    _clearScreen(mode) {
+        if (mode === 0) {
+            for (let r = this.cursorRow; r < this.lines.length; r++) {
+                if (r === this.cursorRow) {
+                    this._clearLine(r, 0);
+                } else {
+                    this.lines[r] = '';
+                }
+            }
+        } else if (mode === 1) {
+            for (let r = 0; r <= this.cursorRow; r++) {
+                if (r === this.cursorRow) {
+                    this._clearLine(r, 1);
+                } else {
+                    this.lines[r] = '';
+                }
+            }
+        } else if (mode === 2) {
+            this.lines = [''];
+            this.cursorRow = 0;
+            this.cursorCol = 0;
+        }
+    }
+
+    feed(data) {
+        let i = 0;
+        while (i < data.length) {
+            if (data.charCodeAt(i) === 27 && data[i + 1] === '[') {
+                let j = i + 2;
+                while (j < data.length && !/[a-zA-Z]/.test(data[j])) j++;
+                if (j < data.length) {
+                    const cmd = data[j];
+                    const paramsStr = data.substring(i + 2, j);
+                    const parts = paramsStr ? paramsStr.split(';') : [];
+                    const p0 = parts[0] ? parseInt(parts[0], 10) : 0;
+                    const p1 = parts[1] ? parseInt(parts[1], 10) : 0;
+
+                    switch (cmd) {
+                        case 'H': case 'f':
+                            this.cursorRow = Math.max(0, (p0 || 1) - 1);
+                            this.cursorCol = Math.max(0, (p1 || 1) - 1);
+                            break;
+                        case 'A':
+                            this.cursorRow = Math.max(0, this.cursorRow - (p0 || 1));
+                            break;
+                        case 'B':
+                            this.cursorRow += (p0 || 1);
+                            break;
+                        case 'C':
+                            this.cursorCol += (p0 || 1);
+                            break;
+                        case 'D':
+                            this.cursorCol = Math.max(0, this.cursorCol - (p0 || 1));
+                            break;
+                        case 'J':
+                            this._clearScreen(p0 || 0);
+                            break;
+                        case 'K':
+                            this._clearLine(this.cursorRow, p0 || 0);
+                            break;
+                        case 'm':
+                            this._handleSGR(parts);
+                            break;
+                        case 's':
+                            break;
+                        case 'u':
+                            break;
+                        case 'h': case 'l':
+                            break;
+                        case 'P': {
+                            const count = p0 || 1;
+                            this._ensureRow(this.cursorRow);
+                            let line = this.lines[this.cursorRow];
+                            const before = line.substring(0, this.cursorCol);
+                            const after = line.substring(this.cursorCol + count);
+                            this.lines[this.cursorRow] = before + after;
+                            break;
+                        }
+                        case '@': {
+                            const count = p0 || 1;
+                            this._ensureRow(this.cursorRow);
+                            let line = this.lines[this.cursorRow];
+                            const before = line.substring(0, this.cursorCol);
+                            const after = line.substring(this.cursorCol);
+                            const insert = ' '.repeat(count);
+                            this.lines[this.cursorRow] = before + insert + after;
+                            break;
+                        }
+                        case 'M': {
+                            const count = p0 || 1;
+                            this._ensureRow(this.cursorRow);
+                            this.lines.splice(this.cursorRow, count);
+                            if (this.lines.length === 0) this.lines = [''];
+                            break;
+                        }
+                        case 'L': {
+                            const count = p0 || 1;
+                            this._ensureRow(this.cursorRow);
+                            for (let k = 0; k < count; k++) {
+                                this.lines.splice(this.cursorRow, 0, '');
                             }
-                        } else {
-                            const cls = sgrCodes[code];
-                            if (cls) {
-                                html += '<span class="' + cls + '">';
-                                openSpans++;
-                            }
+                            break;
+                        }
+                        case 'G':
+                            this.cursorCol = Math.max(0, (p0 || 1) - 1);
+                            break;
+                        case 'd':
+                            this.cursorRow = Math.max(0, (p0 || 1) - 1);
+                            break;
+                        case 'X': {
+                            const count = p0 || 1;
+                            this._ensureRow(this.cursorRow);
+                            let line = this.lines[this.cursorRow];
+                            const spaces = ' '.repeat(count);
+                            const before = line.substring(0, this.cursorCol);
+                            const after = line.substring(this.cursorCol + count);
+                            this.lines[this.cursorRow] = before + spaces + after;
+                            break;
                         }
                     }
-                } else if (cmd === 'H' || cmd === 'f' || cmd === 'A' || cmd === 'B' ||
-                           cmd === 'C' || cmd === 'D' || cmd === 's' || cmd === 'u' ||
-                           cmd === 'J' || cmd === 'K' || cmd === 'h' || cmd === 'l' ||
-                           cmd === 'p' || cmd === 'P') {
+                    i = j + 1;
+                    continue;
                 }
-                i = j + 1;
+            }
+            if (data.charCodeAt(i) === 27 && data[i + 1] === ']') {
+                let j = i + 2;
+                while (j < data.length && data.charCodeAt(j) !== 7 && !(data.charCodeAt(j) === 27 && data[j + 1] === '\\')) j++;
+                if (j < data.length) {
+                    i = (data.charCodeAt(j) === 7) ? j + 1 : j + 2;
+                    continue;
+                }
+            }
+            if (data.charCodeAt(i) === 27) {
+                i++;
+                if (i < data.length && data.charCodeAt(i) >= 0x40 && data.charCodeAt(i) <= 0x5f) i++;
                 continue;
             }
-        }
-        if (text.charCodeAt(i) === 27) {
-            let j = i + 1;
-            while (j < text.length && text.charCodeAt(j) >= 0x40 && text.charCodeAt(j) <= 0x7e &&
-                   text.charCodeAt(j) !== 0x5c && text.charCodeAt(j) !== 0x07) j++;
-            if (j < text.length && (text[j] === '\x07' || text.substring(j - 1, j + 1) === ESC + '\\')) {
-                i = (text[j] === '\x07') ? j + 1 : j + 2;
-                continue;
+
+            const ch = data[i];
+            if (ch === '\n') {
+                this.cursorRow++;
+                this._ensureRow(this.cursorRow);
+            } else if (ch === '\r') {
+                this.cursorCol = 0;
+            } else if (ch === '\t') {
+                const spaces = 8 - (this.cursorCol % 8);
+                for (let s = 0; s < spaces; s++) {
+                    this._setChar(this.cursorRow, this.cursorCol, ' ');
+                    this.cursorCol++;
+                }
+            } else if (ch === '\b') {
+                this.cursorCol = Math.max(0, this.cursorCol - 1);
+            } else if (ch.charCodeAt(0) >= 32 && ch.charCodeAt(0) !== 127) {
+                this._setChar(this.cursorRow, this.cursorCol, ch);
+                this.cursorCol++;
             }
             i++;
-            continue;
         }
-        if (text[i] === '\n') {
-            html += '\n';
-        } else if (text[i] === '\r') {
-        } else if (text[i] === '\t') {
-            html += '    ';
-        } else if (text[i] === '\b') {
-            if (html.length > 0 && html[html.length - 1] !== '\n') {
-                html = html.slice(0, -1);
+    }
+
+    _handleSGR(parts) {
+        for (let k = 0; k < parts.length; k++) {
+            const code = parts[k] || '0';
+            switch (code) {
+                case '0': this.fg = '37'; this.bg = '40'; this.bold = false; this.underline = false; break;
+                case '1': this.bold = true; break;
+                case '4': this.underline = true; break;
+                case '22': this.bold = false; break;
+                case '24': this.underline = false; break;
+                default:
+                    if (code >= '30' && code <= '37') this.fg = code;
+                    else if (code >= '40' && code <= '47') this.bg = code;
+                    else if (code >= '90' && code <= '97') this.fg = code;
+                    else if (code >= '100' && code <= '107') this.bg = code;
+                    else if (code === '39') this.fg = '37';
+                    else if (code === '49') this.bg = '40';
+                    break;
             }
-        } else if (text.charCodeAt(i) < 32 || text.charCodeAt(i) === 127) {
-        } else {
-            html += text[i];
         }
-        i++;
     }
-    while (openSpans > 0) {
-        html += '</span>';
-        openSpans--;
+
+    renderToHtml() {
+        const fgMap = {
+            '30': 'fg-black', '31': 'fg-red', '32': 'fg-green', '33': 'fg-yellow',
+            '34': 'fg-blue', '35': 'fg-magenta', '36': 'fg-cyan', '37': 'fg-white',
+            '90': 'fg-black', '91': 'fg-red', '92': 'fg-green', '93': 'fg-yellow',
+            '94': 'fg-blue', '95': 'fg-magenta', '96': 'fg-cyan', '97': 'fg-white',
+        };
+        const bgMap = {
+            '40': 'bg-black', '41': 'bg-red', '42': 'bg-green', '43': 'bg-yellow',
+            '44': 'bg-blue', '45': 'bg-magenta', '46': 'bg-cyan', '47': 'bg-white',
+            '100': 'bg-black', '101': 'bg-red', '102': 'bg-green', '103': 'bg-yellow',
+            '104': 'bg-blue', '105': 'bg-magenta', '106': 'bg-cyan', '107': 'bg-white',
+        };
+
+        let html = '';
+        for (let r = 0; r < this.lines.length; r++) {
+            if (r > 0) html += '\n';
+            const line = this.lines[r];
+            let classes = [];
+            const fgCls = fgMap[this.fg] || 'fg-white';
+            const bgCls = bgMap[this.bg] || '';
+            if (this.bold) classes.push('bold');
+            if (this.underline) classes.push('underline');
+            classes.push(fgCls);
+            if (bgCls) classes.push(bgCls);
+
+            const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const trailing = escaped.trimEnd();
+            const trailLen = trailing.length;
+
+            if (classes.length > 0) {
+                html += '<span class="' + classes.join(' ') + '">' + escaped.substring(0, trailLen) + '</span>';
+                html += escaped.substring(trailLen);
+            } else {
+                html += escaped;
+            }
+        }
+        return html;
     }
-    return html;
+
+    clone() {
+        const vt = new VirtualTerminal();
+        vt.lines = this.lines.slice();
+        vt.cursorRow = this.cursorRow;
+        vt.cursorCol = this.cursorCol;
+        vt.fg = this.fg;
+        vt.bg = this.bg;
+        vt.bold = this.bold;
+        vt.underline = this.underline;
+        return vt;
+    }
 }
 
-function appendEventToTerminal(event) {
-    const text = event.data || '';
-    terminal.innerHTML = ansiToHtml(terminal.textContent + text);
+let vterm = new VirtualTerminal();
+
+function renderTerminal() {
+    terminal.innerHTML = vterm.renderToHtml();
     terminal.scrollTop = terminal.scrollHeight;
 }
 
-function renderEventsTo(idx) {
-    terminal.textContent = '';
-    terminal.innerHTML = '';
+function feedEvent(event) {
+    vterm.feed(event.data || '');
+    renderTerminal();
+}
+
+function replayTo(idx) {
+    vterm = new VirtualTerminal();
     for (let i = 0; i < idx && i < events.length; i++) {
-        terminal.textContent += (events[i].data || '');
+        vterm.feed(events[i].data || '');
     }
-    terminal.innerHTML = ansiToHtml(terminal.textContent);
-    terminal.scrollTop = terminal.scrollHeight;
+    renderTerminal();
 }
 
 function playNext() {
@@ -335,7 +529,7 @@ function playNext() {
         return;
     }
     const event = events[currentIdx];
-    appendEventToTerminal(event);
+    feedEvent(event);
     currentElapsed += event.delay;
     updateTimeDisplay();
     currentIdx++;
@@ -376,7 +570,7 @@ function reset() {
     pause();
     currentIdx = 0;
     currentElapsed = 0;
-    terminal.textContent = '';
+    vterm = new VirtualTerminal();
     terminal.innerHTML = '';
     updateTimeDisplay();
 }
@@ -389,11 +583,9 @@ function changeSpeed(delta) {
 function jumpTo(idx) {
     pause();
     idx = Math.max(0, Math.min(idx, events.length));
+    replayTo(idx);
     let elapsed = 0;
-    for (let i = 0; i < idx; i++) {
-        elapsed += events[i].delay;
-    }
-    renderEventsTo(idx);
+    for (let i = 0; i < idx; i++) elapsed += events[i].delay;
     currentIdx = idx;
     currentElapsed = elapsed;
     updateTimeDisplay();

@@ -190,6 +190,29 @@ def cmd_list(args) -> int:
     return 0
 
 
+def cmd_list_bookmarks(args) -> int:
+    from .player import PlaybackController
+
+    if not os.path.exists(args.log_file):
+        print(f"Error: Log file not found: {args.log_file}", file=sys.stderr)
+        return 1
+
+    controller = PlaybackController(log_file=args.log_file)
+    bookmarks = controller.list_bookmarks()
+    if not bookmarks:
+        print("No bookmarks found in this session.")
+        return 0
+
+    print("Bookmarks:")
+    for i, bm in enumerate(bookmarks, 1):
+        print(f"  {i}. {bm['name']}")
+        if bm["description"]:
+            print(f"     Description: {bm['description']}")
+        m, s = divmod(int(bm["time_offset"]), 60)
+        print(f"     Time: {m:02d}:{s:02d}")
+    return 0
+
+
 def cmd_multi_record(args) -> int:
     from .config import ConfigLoader
     from .concurrent import ConcurrentSessionManager
@@ -327,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("list", help="List all recorded sessions")
     list_parser.add_argument("--log-dir", default="logs", help="Log directory to scan (default: logs)")
     list_parser.set_defaults(func=cmd_list)
+
+    # List-bookmarks
+    lbm_parser = subparsers.add_parser("list-bookmarks", help="List bookmarks in a session log")
+    lbm_parser.add_argument("log_file", help="Path to session log file")
+    lbm_parser.set_defaults(func=cmd_list_bookmarks)
 
     return parser
 
